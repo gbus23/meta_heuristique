@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import os
@@ -9,11 +8,12 @@ import zipfile
 import argparse
 from typing import List, Tuple, Optional
 
-from metaheuristics.io_instances import load_targets
-from metaheuristics.instance import Instance
-from metaheuristics.solution import is_feasible, covered_targets, connected_to_sink
-from metaheuristics.grasp import grasp
-from metaheuristics.vns import vns
+from meta.io_instances import load_targets
+from meta.instance import Instance
+from meta.solution import is_feasible, covered_targets, connected_to_sink
+from meta.grasp import grasp
+from meta.vns import vns
+from meta.visualization import plot_solution
 
 
 DEFAULT_PAIRS: List[Tuple[int, int]] = [(1, 1), (1, 2), (2, 2), (2, 3)]
@@ -59,7 +59,6 @@ def run_batch(paths: List[str],
 
     for p in paths:
         file_name = os.path.basename(p)
-
         used_pairs = [(int(rcapt), int(rcom))] if (rcapt is not None and rcom is not None) else pairs
 
         for (rc, rco) in used_pairs:
@@ -110,8 +109,53 @@ def main():
 
     ap.add_argument("--rcapt", type=float, default=None, help="If set with --rcom, run only this pair.")
     ap.add_argument("--rcom", type=float, default=None, help="If set with --rcapt, run only this pair.")
+
+    # Plot mode (single instance)
+    ap.add_argument("--plot", action="store_true", help="Plot the solution for a single instance.")
+    ap.add_argument("--file", type=str, default=None, help="Path to one .dat instance (for plotting).")
+    ap.add_argument("--savefig", type=str, default=None, help="If set, save plot to this path (png).")
+    ap.add_argument("--draw_coverage", action="store_true", help="Draw coverage circles (may be slow).")
+    ap.add_argument("--draw_edges", action="store_true", help="Draw some comm edges (may be slow).")
+
     args = ap.parse_args()
 
+    # ---------- PLOT MODE ----------
+    if args.plot:
+        if args.file is None:
+            raise SystemExit("--plot requires --file <path_to_dat>")
+        if args.rcapt is None or args.rcom is None:
+            raise SystemExit("--plot requires --rcapt and --rcom")
+
+        targets = load_targets(args.file, sink=(0.0, 0.0))
+        inst = Instance.build(
+            targets,
+            sink=(0.0, 0.0),
+            rcapt=float(args.rcapt),
+            rcom=float(args.rcom),
+        )
+
+        sol = solve_one(
+            inst,
+            algo=args.algo,
+            time_limit_s=args.time,
+            seed=args.seed,
+            alpha=args.alpha,
+            kmax=args.kmax,
+        )
+
+        title = f"{os.path.basename(args.file)} | R=({inst.rcapt},{inst.rcom}) | {args.algo} | sensors={sol.size()}"
+        plot_solution(
+            inst,
+            sol,
+            title=title,
+            save_path=args.savefig,
+            show=(args.savefig is None),
+            draw_coverage=args.draw_coverage,
+            draw_comm_edges=args.draw_edges,
+        )
+        return
+
+    # ---------- BATCH MODE ----------
     if args.zip is None and args.folder is None:
         raise SystemExit("Provide either --zip or --folder.")
 

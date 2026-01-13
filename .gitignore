@@ -1,0 +1,42 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+
+# ---- IDE / editors ----
+.vscode/
+.idea/
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Logs / cache / temp ----
+*.log
+*.tmp
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- Project outputs ----
+results*.csv
+*.png
+*.pdf
+
+# ---- Extracted instances / data folders ----
+_instances_extract/
+instances/
+data/
