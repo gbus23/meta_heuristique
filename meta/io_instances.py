@@ -71,7 +71,10 @@ def _parse_grid_truncated(path: str) -> Tuple[int, int, Set[Tuple[int, int]]]:
                 continue
             mm = re.search(r"\((\d+)\s*,\s*(\d+)\)", line)
             if mm:
-                removed.add((int(mm.group(1)), int(mm.group(2))))
+                # Convert 1-indexed file format to 0-indexed
+                i_file = int(mm.group(1)) - 1
+                j_file = int(mm.group(2)) - 1
+                removed.add((i_file, j_file))
     return n, m_, removed
 
 
@@ -95,8 +98,10 @@ def load_targets(path: str, sink: Point = (0.0, 0.0)) -> List[Point]:
     if base.startswith("grille"):
         n, m, removed = _parse_grid_truncated(path)
         pts: List[Point] = []
-        for i in range(1, n + 1):
-            for j in range(1, m + 1):
+        # Generate grid from 0 to n (inclusive) and 0 to m (inclusive)
+        # to include all border targets (0,j), (i,0), (n,j), (i,m)
+        for i in range(0, n + 1):
+            for j in range(0, m + 1):
                 if (i, j) in removed:
                     continue
                 pts.append((float(i), float(j)))

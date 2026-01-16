@@ -35,7 +35,7 @@ def prune_descent(inst: Instance, sol: Solution) -> Solution:
     return sol
 
 
-def swap_descent(inst: Instance, sol: Solution, rng: random.Random, max_trials: int = 250) -> Solution:
+def swap_descent(inst: Instance, sol: Solution, rng: random.Random, max_trials: int = 500) -> Solution:
     """
     Descent neighborhood: 1-1 swaps (remove one, add one).
     Random sampling for speed; first improvement.
@@ -53,7 +53,7 @@ def swap_descent(inst: Instance, sol: Solution, rng: random.Random, max_trials: 
         trials += 1
         out = rng.choice(sensors_list)
         inn = rng.randrange(inst.n)
-        if inn == out:
+        if inn in sol.sensors:
             continue
 
         trial = sol.copy()
@@ -70,6 +70,8 @@ def swap_descent(inst: Instance, sol: Solution, rng: random.Random, max_trials: 
             trials = 0  # restart after improvement
 
     return sol
+
+
 
 
 def local_search_vnd(inst: Instance, sol: Solution, rng: random.Random) -> Solution:

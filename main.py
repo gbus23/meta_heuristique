@@ -6,6 +6,7 @@ import glob
 import time
 import zipfile
 import argparse
+from datetime import datetime
 from typing import List, Tuple, Optional
 
 from meta.io_instances import load_targets
@@ -14,7 +15,6 @@ from meta.solution import is_feasible, covered_targets, connected_to_sink
 from meta.grasp import grasp
 from meta.vns import vns
 from meta.visualization import plot_solution_auto
-from meta.comparison import generate_all_comparisons
 
 
 DEFAULT_PAIRS: List[Tuple[int, int]] = [(1, 1), (1, 2), (2, 2), (2, 3)]
@@ -53,11 +53,64 @@ def solve_one(inst: Instance, algo: str, time_limit_s: float, seed: int, alpha: 
     raise ValueError(f"Unknown algo: {algo}")
 
 
-def solve_both_separately(inst: Instance, time_limit_s: float, seed: int, alpha: float, kmax: int):
-    """Résout avec GRASP et VNS séparément et retourne les deux solutions."""
-    s1 = grasp(inst, time_limit_s=time_limit_s, alpha=alpha, seed=seed)
-    s2 = vns(inst, time_limit_s=time_limit_s, kmax=kmax, seed=seed)
-    return s1, s2
+def solve_multi(inst: Instance,
+                algo: str,
+                per_run_s: float,
+                restarts: int,
+                seed: int,
+                alpha: float,
+                kmax: int,
+                verbose: bool = False):
+    """
+    Multi-restart wrapper:
+      - runs the chosen algorithm 'restarts' times
+      - each time with a different seed (seed + r)
+      - returns the best feasible solution (min |S|)
+    """
+    best_sol = None
+    best_size = 10**18
+    all_sizes = []
+
+    for r in range(restarts):
+        sol = solve_one(
+            inst,
+            algo=algo,
+            time_limit_s=per_run_s,
+            seed=seed + r,
+            alpha=alpha,
+            kmax=kmax,
+        )
+        sol_size = sol.size() if is_feasible(inst, sol) else float('inf')
+        all_sizes.append(sol_size)
+        
+        if is_feasible(inst, sol) and sol.size() < best_size:
+            best_sol = sol
+            best_size = sol.size()
+        
+        if verbose and restarts > 1:
+            status = "OK" if is_feasible(inst, sol) else "FAIL"
+            best_mark = " [BEST]" if sol_size == best_size and sol_size != float('inf') else ""
+            print(f"  Restart {r+1}/{restarts} (seed={seed+r}): {sol.size()} sensors {status}{best_mark}")
+
+    # Fallback (should not happen if instances are valid)
+    if best_sol is None:
+        best_sol = solve_one(
+            inst,
+            algo=algo,
+            time_limit_s=per_run_s,
+            seed=seed,
+            alpha=alpha,
+            kmax=kmax,
+        )
+    
+    if verbose and restarts > 1:
+        feasible_sizes = [s for s in all_sizes if s != float('inf')]
+        if feasible_sizes:
+            print(f"  Multi-départ: best={min(feasible_sizes)}, worst={max(feasible_sizes)}, "
+                  f"avg={sum(feasible_sizes)/len(feasible_sizes):.1f}, "
+                  f"feasible={len(feasible_sizes)}/{restarts}")
+
+    return best_sol
 
 
 def run_batch(paths: List[str],
@@ -65,143 +118,94 @@ def run_batch(paths: List[str],
               rcom: Optional[float],
               pairs: List[Tuple[int, int]],
               algo: str,
-              time_limit_s: float,
+              per_run_s: float,
+              restarts: int,
               seed: int,
               alpha: float,
               kmax: int,
               csv_out: str) -> None:
     rows = []
-    os.makedirs(os.path.join("results", "plots"), exist_ok=True)
+    
+    # Create timestamped subfolder for this run (format: jour_heure_minute, e.g., 16_14_21)
+    timestamp = datetime.now().strftime("%d_%H_%M")
+    plots_dir = os.path.join("results", "plots", timestamp)
+    os.makedirs(plots_dir, exist_ok=True)
 
-    total_tasks = len(paths) * (len(pairs) if (rcapt is None or rcom is None) else 1)
-    if algo == "both":
-        total_tasks *= 2  # GRASP et VNS séparément
+    # Calculate total number of tasks
+    used_pairs = [(int(rcapt), int(rcom))] if (rcapt is not None and rcom is not None) else pairs
+    total_tasks = len(paths) * len(used_pairs)
     current_task = 0
 
-    print(f"\n{'='*80}")
-    print(f"Démarrage du traitement batch")
-    print(f"  Instances: {len(paths)}")
-    print(f"  Paires (Rcapt, Rcom): {len(pairs) if (rcapt is None or rcom is None) else 1}")
-    print(f"  Algorithme(s): {algo}")
-    print(f"  Limite de temps: {time_limit_s}s par instance")
-    print(f"{'='*80}\n")
+    print(f"\n{'='*70}")
+    print(f"Batch execution: {len(paths)} instance(s) x {len(used_pairs)} paire(s) = {total_tasks} tache(s)")
+    print(f"Algorithme: {algo.upper()}, Restarts: {restarts}, Temps/run: {per_run_s}s")
+    print(f"Plots sauvegardes dans: {plots_dir}")
+    print(f"{'='*70}\n")
 
-    for p in paths:
+    for idx, p in enumerate(paths):
         file_name = os.path.basename(p)
-        used_pairs = [(int(rcapt), int(rcom))] if (rcapt is not None and rcom is not None) else pairs
+        print(f"[Instance {idx+1}/{len(paths)}] {file_name}")
 
-        for (rc, rco) in used_pairs:
+        for pair_idx, (rc, rco) in enumerate(used_pairs):
+            current_task += 1
+            print(f"  [{current_task}/{total_tasks}] Paire R=({rc},{rco}) ... ", end="", flush=True)
+
             targets = load_targets(p, sink=(0.0, 0.0))
             inst = Instance.build(targets, sink=(0.0, 0.0), rcapt=float(rc), rcom=float(rco))
 
-            if algo == "both":
-                # Exécuter GRASP et VNS séparément pour avoir des résultats comparables
-                current_task += 1
-                print(f"[{current_task}/{total_tasks}] {file_name} R=({rc},{rco}) - GRASP...", end=" ", flush=True)
-                t0 = time.time()
-                sol_grasp = grasp(inst, time_limit_s=time_limit_s, alpha=alpha, seed=seed)
-                dt_grasp = time.time() - t0
-                
-                feas_grasp = is_feasible(inst, sol_grasp)
-                uncovered_grasp = inst.n - len(covered_targets(inst, sol_grasp))
-                disconnected_grasp = sol_grasp.size() - len(connected_to_sink(inst, sol_grasp))
-                
-                base = _safe_stem(os.path.splitext(file_name)[0])
-                tag = f"R{int(inst.rcapt)}-{int(inst.rcom)}"
-                out_name_grasp = f"{base}__{tag}__grasp__S{sol_grasp.size()}.png"
-                save_path_grasp = os.path.join("results", "plots", out_name_grasp)
-                
-                title_grasp = (
-                    f"{file_name} | R=({inst.rcapt},{inst.rcom}) | grasp | "
-                    f"sensors={sol_grasp.size()} | uncov={uncovered_grasp} | disc={disconnected_grasp}"
-                )
-                
-                plot_solution_auto(inst, sol_grasp, title=title_grasp, save_path=save_path_grasp, show=False)
-                print(f"✓ {sol_grasp.size()} capteurs ({dt_grasp:.2f}s)")
-                
-                rows.append({
-                    "file": file_name,
-                    "rcapt": rc,
-                    "rcom": rco,
-                    "algo": "grasp",
-                    "time_s": round(dt_grasp, 4),
-                    "sensors": sol_grasp.size(),
-                    "feasible": feas_grasp,
-                    "uncovered": uncovered_grasp,
-                    "disconnected": disconnected_grasp,
-                    "plot_path": save_path_grasp,
-                })
-                
-                current_task += 1
-                print(f"[{current_task}/{total_tasks}] {file_name} R=({rc},{rco}) - VNS...", end=" ", flush=True)
-                t0 = time.time()
-                sol_vns = vns(inst, time_limit_s=time_limit_s, kmax=kmax, seed=seed)
-                dt_vns = time.time() - t0
-                
-                feas_vns = is_feasible(inst, sol_vns)
-                uncovered_vns = inst.n - len(covered_targets(inst, sol_vns))
-                disconnected_vns = sol_vns.size() - len(connected_to_sink(inst, sol_vns))
-                
-                out_name_vns = f"{base}__{tag}__vns__S{sol_vns.size()}.png"
-                save_path_vns = os.path.join("results", "plots", out_name_vns)
-                
-                title_vns = (
-                    f"{file_name} | R=({inst.rcapt},{inst.rcom}) | vns | "
-                    f"sensors={sol_vns.size()} | uncov={uncovered_vns} | disc={disconnected_vns}"
-                )
-                
-                plot_solution_auto(inst, sol_vns, title=title_vns, save_path=save_path_vns, show=False)
-                print(f"✓ {sol_vns.size()} capteurs ({dt_vns:.2f}s)")
-                
-                rows.append({
-                    "file": file_name,
-                    "rcapt": rc,
-                    "rcom": rco,
-                    "algo": "vns",
-                    "time_s": round(dt_vns, 4),
-                    "sensors": sol_vns.size(),
-                    "feasible": feas_vns,
-                    "uncovered": uncovered_vns,
-                    "disconnected": disconnected_vns,
-                    "plot_path": save_path_vns,
-                })
-            else:
-                current_task += 1
-                print(f"[{current_task}/{total_tasks}] {file_name} R=({rc},{rco}) - {algo.upper()}...", end=" ", flush=True)
-                
-                t0 = time.time()
-                sol = solve_one(inst, algo=algo, time_limit_s=time_limit_s, seed=seed, alpha=alpha, kmax=kmax)
-                dt = time.time() - t0
+            t0 = time.time()
+            sol = solve_multi(
+                inst,
+                algo=algo,
+                per_run_s=per_run_s,
+                restarts=restarts,
+                seed=seed,
+                alpha=alpha,
+                kmax=kmax,
+                verbose=False,  # No verbose in batch mode
+            )
+            dt = time.time() - t0
 
-                feas = is_feasible(inst, sol)
-                uncovered = inst.n - len(covered_targets(inst, sol))
-                disconnected = sol.size() - len(connected_to_sink(inst, sol))
+            feas = is_feasible(inst, sol)
+            uncovered = inst.n - len(covered_targets(inst, sol))
+            disconnected = sol.size() - len(connected_to_sink(inst, sol))
 
-                base = _safe_stem(os.path.splitext(file_name)[0])
-                tag = f"R{int(inst.rcapt)}-{int(inst.rcom)}"
-                out_name = f"{base}__{tag}__{algo}__S{sol.size()}.png"
-                save_path = os.path.join("results", "plots", out_name)
+            status = "OK" if feas else "FAIL"
+            print(f"Done: {sol.size()} capteurs, {dt:.2f}s, {status}")
 
-                title = (
-                    f"{file_name} | R=({inst.rcapt},{inst.rcom}) | {algo} | "
-                    f"sensors={sol.size()} | uncov={uncovered} | disc={disconnected}"
-                )
+            # ---- AUTO SAVE PLOT (no display) ----
+            base = _safe_stem(os.path.splitext(file_name)[0])
+            tag = f"R{int(inst.rcapt)}-{int(inst.rcom)}"
+            out_name = f"{base}__{tag}__{algo}__S{sol.size()}__RR{restarts}__T{per_run_s}.png"
+            save_path = os.path.join(plots_dir, out_name)
 
-                plot_solution_auto(inst, sol, title=title, save_path=save_path, show=False)
-                print(f"✓ {sol.size()} capteurs ({dt:.2f}s)")
+            title = (
+                f"{file_name} | R=({inst.rcapt},{inst.rcom}) | {algo} | "
+                f"sensors={sol.size()} | uncov={uncovered} | disc={disconnected}"
+            )
 
-                rows.append({
-                    "file": file_name,
-                    "rcapt": rc,
-                    "rcom": rco,
-                    "algo": algo,
-                    "time_s": round(dt, 4),
-                    "sensors": sol.size(),
-                    "feasible": feas,
-                    "uncovered": uncovered,
-                    "disconnected": disconnected,
-                    "plot_path": save_path,
-                })
+            plot_solution_auto(
+                inst,
+                sol,
+                title=title,
+                save_path=save_path,
+                show=False,
+            )
+
+            rows.append({
+                "file": file_name,
+                "rcapt": rc,
+                "rcom": rco,
+                "algo": algo,
+                "per_run_s": per_run_s,
+                "restarts": restarts,
+                "time_total_s": round(dt, 4),
+                "sensors": sol.size(),
+                "feasible": feas,
+                "uncovered": uncovered,
+                "disconnected": disconnected,
+                "plot_path": save_path,
+            })
 
     if not rows:
         raise RuntimeError("No results produced (no instances / pairs).")
@@ -210,12 +214,18 @@ def run_batch(paths: List[str],
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
+
+    # Summary
+    feasible_count = sum(1 for r in rows if r["feasible"])
+    avg_sensors = sum(r["sensors"] for r in rows) / len(rows) if rows else 0
+    total_time = sum(r["time_total_s"] for r in rows)
     
-    print(f"\n{'='*80}")
-    print(f"Traitement terminé!")
-    print(f"  Résultats sauvegardés dans: {csv_out}")
-    print(f"  Total de résultats: {len(rows)}")
-    print(f"{'='*80}\n")
+    print(f"\n{'='*70}")
+    print(f"Termine ! {len(rows)} resultat(s) sauvegarde(s) dans: {csv_out}")
+    print(f"  - Solutions faisables: {feasible_count}/{len(rows)}")
+    print(f"  - Moyenne capteurs: {avg_sensors:.2f}")
+    print(f"  - Temps total: {total_time:.2f}s ({total_time/60:.2f}min)")
+    print(f"{'='*70}\n")
 
 
 def main():
@@ -226,7 +236,10 @@ def main():
     ap.add_argument("--csv", type=str, default="results.csv", help="Output CSV file.")
 
     ap.add_argument("--algo", type=str, default="both", choices=["grasp", "vns", "both"])
-    ap.add_argument("--time", type=float, default=2.0, help="Time limit per instance+pair (seconds).")
+    ap.add_argument("--time", type=float, default=2.0, help="(Legacy) Total time per instance+pair (seconds).")
+    ap.add_argument("--per-run", type=float, default=None, help="Time per restart run (seconds).")
+    ap.add_argument("--restarts", type=int, default=1, help="Number of restarts (runs) per instance+pair.")
+
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--alpha", type=float, default=0.3, help="GRASP alpha for RCL (0..1).")
     ap.add_argument("--kmax", type=int, default=4, help="VNS kmax.")
@@ -237,19 +250,12 @@ def main():
     # Plot mode (single instance)
     ap.add_argument("--plot", action="store_true", help="Plot the solution for a single instance.")
     ap.add_argument("--file", type=str, default=None, help="Path to one .dat instance (for plotting).")
-    
-    # Comparison mode
-    ap.add_argument("--compare", action="store_true", help="Generate comparison tables and graphs from CSV results.")
-    ap.add_argument("--csv-in", type=str, default="results.csv", help="Input CSV file for comparison (default: results.csv).")
 
     args = ap.parse_args()
 
-    # ---------- COMPARISON MODE ----------
-    if args.compare:
-        if not os.path.exists(args.csv_in):
-            raise SystemExit(f"Fichier CSV introuvable: {args.csv_in}")
-        generate_all_comparisons(args.csv_in, show=False)
-        return
+    # Choose per-run time
+    per_run_s = args.per_run if args.per_run is not None else args.time
+    restarts = max(1, int(args.restarts))
 
     # ---------- PLOT MODE ----------
     if args.plot:
@@ -266,20 +272,22 @@ def main():
             rcom=float(args.rcom),
         )
 
-        sol = solve_one(
+        print(f"Multi-départ: {restarts} restart(s) avec {per_run_s}s par run")
+        sol = solve_multi(
             inst,
             algo=args.algo,
-            time_limit_s=args.time,
+            per_run_s=per_run_s,
+            restarts=restarts,
             seed=args.seed,
             alpha=args.alpha,
             kmax=args.kmax,
+            verbose=True,  # Show multi-start progress in plot mode
         )
 
-        # Auto-save into results/plots/
         os.makedirs(os.path.join("results", "plots"), exist_ok=True)
         base = _safe_stem(os.path.splitext(os.path.basename(args.file))[0])
         tag = f"R{int(inst.rcapt)}-{int(inst.rcom)}"
-        out_name = f"{base}__{tag}__{args.algo}__S{sol.size()}.png"
+        out_name = f"{base}__{tag}__{args.algo}__S{sol.size()}__RR{restarts}__T{per_run_s}.png"
         save_path = os.path.join("results", "plots", out_name)
 
         uncovered = inst.n - len(covered_targets(inst, sol))
@@ -319,7 +327,8 @@ def main():
         rcom=args.rcom,
         pairs=DEFAULT_PAIRS,
         algo=args.algo,
-        time_limit_s=args.time,
+        per_run_s=per_run_s,
+        restarts=restarts,
         seed=args.seed,
         alpha=args.alpha,
         kmax=args.kmax,
