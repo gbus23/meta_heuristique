@@ -15,6 +15,7 @@ from meta.solution import is_feasible, covered_targets, connected_to_sink
 from meta.grasp import grasp
 from meta.vns import vns
 from meta.visualization import plot_solution_auto
+from meta.genetic import genetic_algorithm
 
 
 DEFAULT_PAIRS: List[Tuple[int, int]] = [(1, 1), (1, 2), (2, 2), (2, 3)]
@@ -44,6 +45,8 @@ def solve_one(inst: Instance, algo: str, time_limit_s: float, seed: int, alpha: 
         return grasp(inst, time_limit_s=time_limit_s, alpha=alpha, seed=seed)
     if algo == "vns":
         return vns(inst, time_limit_s=time_limit_s, kmax=kmax, seed=seed)
+    if algo == "ga":
+        return genetic_algorithm(inst, time_limit_s=time_limit_s, pop_size=50, seed=seed)
     if algo == "both":
         s1 = grasp(inst, time_limit_s=time_limit_s, alpha=alpha, seed=seed)
         s2 = vns(inst, time_limit_s=time_limit_s, kmax=kmax, seed=seed)
@@ -235,7 +238,7 @@ def main():
     ap.add_argument("--outdir", type=str, default="./_instances_extract", help="Where to extract zip (if used).")
     ap.add_argument("--csv", type=str, default="results.csv", help="Output CSV file.")
 
-    ap.add_argument("--algo", type=str, default="both", choices=["grasp", "vns", "both"])
+    ap.add_argument("--algo", type=str, default="both", choices=["grasp", "vns", "both","ga"])
     ap.add_argument("--time", type=float, default=2.0, help="(Legacy) Total time per instance+pair (seconds).")
     ap.add_argument("--per-run", type=float, default=None, help="Time per restart run (seconds).")
     ap.add_argument("--restarts", type=int, default=1, help="Number of restarts (runs) per instance+pair.")
