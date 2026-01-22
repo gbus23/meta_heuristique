@@ -11,14 +11,7 @@ from .solution import Solution, connected_to_sink
 
 
 def _build_connectivity_tree(inst: Instance, sol: Solution) -> Tuple[List[Tuple[Idx, Idx]], List[Idx]]:
-    """
-    Builds a BFS tree on the induced subgraph of selected sensors,
-    rooted at sensors directly connected to the sink.
-
-    Returns:
-      - edges (u, v) of the BFS tree among sensors
-      - roots (selected sensors that are within Rcom of the sink)
-    """
+    """Construit un arbre BFS sur les capteurs sélectionnés, enraciné aux capteurs connectés au sink."""
     selected = set(sol.sensors)
     if not selected:
         return [], []
@@ -49,81 +42,42 @@ def plot_solution_auto(
     save_path: Optional[str] = None,
     show: bool = True,
 ):
-    """
-    One-command plot:
-      - targets
-      - selected sensors
-      - sink
-      - coverage circles (radius Rcapt)
-      - connectivity (BFS tree + sink->roots)
-
-    Design choices for readability:
-      - single color for connectivity edges
-      - auto-limit the number of coverage circles shown
-    """
+    """Affiche la solution : cibles, capteurs, sink, cercles de couverture, connectivité."""
     fig, ax = plt.subplots()
 
-    # Targets
     xs = [p[0] for p in inst.targets]
     ys = [p[1] for p in inst.targets]
     ax.scatter(xs, ys, s=10, label="Targets")
 
-    # Sensors
     if sol.sensors:
         sx = [inst.targets[i][0] for i in sol.sensors]
         sy = [inst.targets[i][1] for i in sol.sensors]
         ax.scatter(sx, sy, s=45, label=f"Sensors (|S|={sol.size()})")
 
-    # Sink
     ax.scatter([inst.sink[0]], [inst.sink[1]], s=200, marker="*", edgecolors="black", label="Sink")
 
-    # Coverage circles (auto-limit for readability)
-    EDGE_COLOR = "black"
-    EDGE_LW = 1.0
-    EDGE_ALPHA = 0.9
-    sensors_sorted = sorted(sol.sensors)
-    max_circles = 120
-    shown = sensors_sorted[:max_circles]
-    for i in shown:
-        c = Circle(inst.targets[i], inst.rcapt, fill=False, linewidth=0.8, alpha=0.6)
-        ax.add_patch(c)
+    # Afficher tous les cercles de captation et de communication
+    for i in sorted(sol.sensors):
+        # Rayon de captation (cercle plein)
+        c_capt = Circle(inst.targets[i], inst.rcapt, fill=False, linewidth=0.8, alpha=0.6, color='blue')
+        ax.add_patch(c_capt)
+        # Rayon de communication (pointillés noirs)
+        c_com = Circle(inst.targets[i], inst.rcom, fill=False, linewidth=0.5, 
+                      linestyle='--', alpha=0.6, color='black')
+        ax.add_patch(c_com)
 
-    if sol.size() > max_circles:
-        ax.text(
-            0.01, 0.01,
-            f"Coverage circles shown: {max_circles}/{sol.size()} (auto-limited)",
-            transform=ax.transAxes,
-            fontsize=9,
-            verticalalignment="bottom"
-        )
-
-    # Connectivity: BFS tree edges among sensors + sink->roots edges
     edges, roots = _build_connectivity_tree(inst, sol)
 
-    # Use a single style (no rainbow)
-    edge_lw = 1.0
     for (u, v) in edges:
-            ax.plot(
-            [inst.targets[u][0], inst.targets[v][0]],
-            [inst.targets[u][1], inst.targets[v][1]],
-            color=EDGE_COLOR,
-            linewidth=EDGE_LW,
-            alpha=EDGE_ALPHA,
-            zorder=2,
-    )
+        ax.plot([inst.targets[u][0], inst.targets[v][0]],
+                [inst.targets[u][1], inst.targets[v][1]],
+                color="black", linewidth=1.0, alpha=0.9, zorder=2)
 
-    # Draw sink -> roots to make connectivity to sink visible
     for r in roots:
-        ax.plot(
-            [inst.sink[0], inst.targets[r][0]],
-            [inst.sink[1], inst.targets[r][1]],
-            color=EDGE_COLOR,
-            linewidth=EDGE_LW,
-            alpha=EDGE_ALPHA,
-            zorder=2,
-    )
+        ax.plot([inst.sink[0], inst.targets[r][0]],
+                [inst.sink[1], inst.targets[r][1]],
+                color="black", linewidth=1.0, alpha=0.9, zorder=2)
 
-    # Compute disconnected count (for title)
     conn = connected_to_sink(inst, sol)
     disconnected = sol.size() - len(conn)
 

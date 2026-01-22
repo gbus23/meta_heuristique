@@ -449,6 +449,197 @@ SORTIE: Meilleure solution best
 
 ---
 
+### 3. Recuit Simulé (`simulated_annealing`)
+
+#### Principe
+
+Le **Recuit Simulé (Simulated Annealing)** est une métaheuristique inspirée du processus de recuit métallurgique. Il accepte des solutions moins bonnes avec une probabilité décroissante au fil du temps, permettant d'échapper aux optima locaux.
+
+#### Composants principaux
+
+1. **Solution initiale** : Construction gloutonne + amélioration locale (VND)
+2. **Génération de voisins** : Multi-niveaux (remove, add, swap, 2-1, 3-2, 3-1, 4-2, reconstruction partielle)
+3. **Acceptation probabiliste** : `P(accepter) = exp(-Δ/T)` où Δ est la différence de qualité et T la température
+4. **Refroidissement adaptatif** : Schéma multi-phase avec refroidissement logarithmique puis géométrique
+5. **Rechauffement périodique** : Diversification agressive quand bloqué
+
+#### Génération de voisins
+
+Le recuit utilise plusieurs niveaux de voisinages :
+
+- **Niveau 1** (probabilité 40%) : Remove, Add, Swap classiques
+- **Niveau 2** (probabilité 30%) : Échanges 2-1, 3-2 (retirer plusieurs, ajouter moins)
+- **Niveau 3** (probabilité 20%) : Échanges 3-1, 4-2 (plus agressifs)
+- **Niveau 4** (probabilité 10%) : Reconstruction partielle (retirer plusieurs capteurs, reconstruire avec glouton)
+
+La sélection utilise l'utilité des capteurs : les capteurs peu utiles sont préférés pour la suppression.
+
+#### Température initiale adaptative
+
+La température initiale est estimée en échantillonnant des voisins et en calculant :
+```
+T₀ = moyenne(|Δ|) / ln(acceptance_rate_desirée)
+```
+
+Cela garantit un taux d'acceptation initial d'environ 50-60%.
+
+#### Schéma de refroidissement multi-phase
+
+1. **Phase haute température** (T > 0.6×T₀) : Refroidissement logarithmique lent
+2. **Phase moyenne** (0.3×T₀ < T ≤ 0.6×T₀) : Refroidissement géométrique standard
+3. **Phase basse température** (T ≤ 0.3×T₀) : Refroidissement géométrique agressif
+
+Le refroidissement s'adapte au taux d'acceptation : plus rapide si peu d'acceptations, plus lent sinon.
+
+#### Intensification locale
+
+À basse température, une recherche locale intensive est appliquée systématiquement :
+- VND standard
+- Plusieurs passes de `swap_2_1_descent`
+- Application répétée de VND
+
+#### Rechauffement et diversification
+
+Quand aucune amélioration n'est trouvée depuis 100 itérations :
+1. **Rechauffement** : Température remise à 70% de T₀
+2. **Diversification** : Retrait de 3-5 capteurs peu utiles
+3. **Reconstruction** : Reconstruction partielle avec glouton
+4. **Amélioration** : Application de VND
+
+#### Algorithme détaillé
+
+```
+ENTRÉE: Instance inst, time_limit_s, seed
+SORTIE: Meilleure solution best
+
+1. Initialiser générateur aléatoire: rng = Random(seed)
+2. t0 = time()
+
+3. Solution initiale:
+   - current = greedy_construct(inst)
+   - current = local_search_vnd(inst, current, rng)
+   - best = current.copy()
+
+4. Estimation température initiale T₀:
+   - Échantillonner des voisins
+   - T₀ = moyenne(|Δ|) / ln(0.5)
+
+5. temp = T₀
+6. iterations = 0
+7. last_improvement_iter = 0
+
+8. TANT QUE time() - t0 < time_limit_s:
+   a. Pour iterations_per_temp itérations:
+      i. Générer voisin:
+         - Sélectionner niveau de voisinage selon température et état
+         - neighbor = generate_neighbor(inst, current, rng, temp, aggressive, stuck)
+      
+      ii. Réparation:
+          - Si couverture cassée: réparer
+          - neighbor = repair_connectivity(inst, neighbor)
+      
+      iii. Recherche locale (selon température):
+          - Si temp < 0.3×T₀: recherche locale intensive
+          - Sinon si temp < 0.6×T₀: VND standard
+          - Sinon: VND léger
+      
+      iv. Acceptation:
+          - Δ = neighbor.size() - current.size()
+          - Si Δ < 0: accepter (amélioration)
+          - Sinon si Δ == 0: accepter (diversification)
+          - Sinon: accepter avec probabilité exp(-Δ/(temp×stuck_factor))
+      
+      v. Si accepté:
+         - current = neighbor
+         - Si current.size() < best.size():
+              best = current.copy()
+              Intensifier autour de best
+              last_improvement_iter = iterations
+      
+      vi. iterations += 1
+   
+   b. Refroidissement adaptatif:
+      - Calculer taux d'acceptation
+      - Ajuster temp selon phase et taux d'acceptation
+      - Si temp < min_temp: temp = min_temp
+   
+   c. Rechauffement si bloqué:
+      - Si iterations - last_improvement_iter > 100:
+           temp = max(temp, 0.7×T₀)
+           Diversifier current (retirer capteurs, reconstruire)
+           last_improvement_iter = iterations
+
+9. RETOURNER best
+```
+
+#### Paramètres
+
+- **time_limit_s** : Limite de temps en secondes (défaut: 2.0)
+- **seed** : Graine pour la reproductibilité (défaut: 0)
+- **cooling_rate** : Taux de refroidissement géométrique (défaut: 0.985, optimisé via grid search)
+- **min_temp** : Température minimale (défaut: 0.001, optimisé via grid search)
+- **cooling_factors** : Dictionnaire des facteurs de refroidissement adaptatif (défaut: optimisés)
+  - `high_temp_slow`: 0.99 (refroidissement lent haute température)
+  - `high_temp_fast`: 1.03 (refroidissement rapide haute température)
+  - `mid_temp_fast`: 1.08 (refroidissement rapide température moyenne)
+  - `low_temp_fast`: 1.15 (refroidissement rapide basse température)
+- **acceptance_thresholds** : Dictionnaire des seuils d'acceptation (défaut: optimisés)
+  - `high_accept`: 0.3 (seuil haute température)
+  - `mid_accept`: 0.15 (seuil température moyenne)
+  - `low_accept`: 0.1 (seuil basse température)
+
+#### Stratégie d'acceptation
+
+- **Amélioration** (Δ < 0) : Toujours acceptée
+- **Même qualité** (Δ = 0) : Acceptée pour diversification
+- **Dégradation** (Δ > 0) : Acceptée avec probabilité `exp(-Δ/(T×stuck_factor))`
+  - `stuck_factor = 1.5` si bloqué depuis > 100 itérations (plus permissif)
+
+#### Complexité
+
+- **Temps** : O(time_limit_s × iterations_per_temp × (génération + amélioration))
+- **Espace** : O(n)
+
+#### Avantages
+
+- **Échappement des optima locaux** : Acceptation probabiliste permet d'explorer plus largement
+- **Adaptatif** : S'adapte automatiquement à la structure du problème
+- **Multi-niveaux** : Utilise plusieurs voisinages pour une exploration efficace
+- **Intensification** : Recherche locale intensive à basse température
+
+#### Optimisation des paramètres via Grid Search
+
+Les paramètres de refroidissement du recuit simulé ont été optimisés via une recherche systématique (grid search) à l'aide du script `benchmark_sa_params.py`.
+
+**Utilisation du script de benchmark :**
+
+```bash
+python benchmark_sa_params.py <instance_path> <rcapt> <rcom> [time_limit] [restarts]
+```
+
+Exemple :
+```bash
+python benchmark_sa_params.py instances/instances_grid/grille1010_1.dat 2 3 2.0 3
+```
+
+Le script exécute trois phases :
+1. **Phase 1** : Test de `cooling_rate` et `min_temp`
+2. **Phase 2** : Test des facteurs de refroidissement adaptatif
+3. **Phase 3** : Test des seuils d'acceptation
+
+Les résultats sont sauvegardés dans un fichier CSV avec timestamp et un résumé des meilleures configurations est affiché.
+
+**Résultats de l'optimisation :**
+
+Sur l'instance `grille1010_1.dat` avec R=(2,3), les paramètres optimaux identifiés sont :
+- `cooling_rate`: 0.985 (au lieu de 0.99)
+- `min_temp`: 0.001 (au lieu de 0.01)
+- Facteurs de refroidissement légèrement plus agressifs pour une meilleure exploration
+
+Ces valeurs sont maintenant utilisées par défaut dans `simulated_annealing()`.
+
+---
+
 ## Architecture du code
 
 ### Structure des modules
@@ -461,12 +652,14 @@ meta/
 ├── io_instances.py       # Chargement des instances (.dat)
 ├── constructive.py      # Heuristiques constructives (greedy, randomized)
 ├── local_search.py      # Recherche locale (prune, swap, VND)
-├── grasp.py             # Métaheuristique GRASP
 ├── vns.py               # Métaheuristique VNS
+├── genetic.py           # Algorithme génétique
+├── simulated_annealing.py # Recuit simulé
 ├── visualization.py     # Visualisation des solutions
 └── comparison.py        # Comparaison des résultats (tableaux, graphiques)
 
 main.py                  # Point d'entrée principal (CLI, batch processing)
+benchmark_sa_params.py   # Script de grid search pour optimiser les paramètres SA
 ```
 
 ### Flux de données
@@ -478,16 +671,16 @@ io_instances.load_targets()
     ↓
 Instance.build()  [précalculs: cover, comm, sink_comm]
     ↓
-┌─────────────────┬─────────────────┐
-│   GRASP         │      VNS        │
-│                 │                 │
-│ randomized_     │ shake()         │
-│ greedy_construct│                 │
-│        ↓        │        ↓        │
-│ local_search_   │ local_search_   │
-│ vnd()           │ vnd()           │
-└─────────────────┴─────────────────┘
-    ↓                    ↓
+┌──────────────┬──────────────┬──────────────┬──────────────────┐
+│     VNS      │  Génétique   │ Recuit Sim.  │                  │
+│              │              │              │                  │
+│ shake()      │ crossover()  │ generate_    │                  │
+│              │ mutate()     │ neighbor()   │                  │
+│      ↓       │      ↓       │      ↓       │                  │
+│ local_search │ local_search │ local_search │                  │
+│ vnd()        │ vnd()        │ vnd()        │                  │
+└──────────────┴──────────────┴──────────────┴──────────────────┘
+    ↓                ↓                ↓
 Solution → is_feasible() → CSV + Plots
 ```
 
@@ -497,8 +690,9 @@ Solution → is_feasible() → CSV + Plots
 - **`solution.py`** : Représentation des solutions, vérification de faisabilité, réparation de connectivité
 - **`constructive.py`** : Génération de solutions initiales (gloutonne déterministe et randomisée)
 - **`local_search.py`** : Amélioration locale via différents voisinages
-- **`grasp.py`** : Métaheuristique GRASP complète
 - **`vns.py`** : Métaheuristique VNS complète
+- **`genetic.py`** : Algorithme génétique mémétique
+- **`simulated_annealing.py`** : Recuit simulé avec voisinages multi-niveaux
 - **`visualization.py`** : Génération de graphiques montrant les solutions
 - **`comparison.py`** : Analyse comparative des résultats (statistiques, tableaux, graphiques)
 
@@ -534,32 +728,35 @@ Le projet supporte deux formats d'instances :
 
 ### Commandes principales
 
-#### 1. Traitement batch avec comparaison GRASP vs VNS
+#### 1. Traitement batch
 
 ```bash
-python main.py --folder "./instances" --algo both --time 2.0 --csv results.csv
+python main.py --folder "./instances" --algo sa --time 2.0 --csv results.csv
 ```
 
 Options :
 - `--folder` : Dossier contenant les fichiers `.dat`
-- `--algo both` : Exécute GRASP et VNS séparément pour chaque instance
+- `--algo` : Algorithme à utiliser (`vns`, `ga`, `sa`, `annealing`)
 - `--time` : Limite de temps par instance (secondes)
 - `--csv` : Fichier de sortie CSV
 
 #### 2. Exécution avec un seul algorithme
 
 ```bash
-# GRASP uniquement
-python main.py --folder "./instances" --algo grasp --time 2.0
-
 # VNS uniquement
 python main.py --folder "./instances" --algo vns --time 2.0 --kmax 4
+
+# Algorithme génétique
+python main.py --folder "./instances" --algo ga --time 2.0
+
+# Recuit simulé
+python main.py --folder "./instances" --algo sa --time 2.0
 ```
 
 #### 3. Exécution sur une paire de rayons spécifique
 
 ```bash
-python main.py --folder "./instances" --rcapt 2 --rcom 3 --algo both
+python main.py --folder "./instances" --rcapt 2 --rcom 3 --algo sa
 ```
 
 #### 4. Visualisation d'une solution unique
@@ -587,17 +784,18 @@ Cette commande génère :
 ```bash
 python main.py \
     --folder "./instances" \
-    --algo both \
+    --algo sa \
     --time 3.0 \
+    --restarts 5 \
     --seed 42 \
-    --alpha 0.3 \
-    --kmax 5 \
+    --kmax 4 \
     --csv results.csv
 ```
 
 - `--seed` : Graine pour la reproductibilité
-- `--alpha` : Paramètre GRASP (0=déterministe, 1=aléatoire)
-- `--kmax` : Intensité maximale de shake VNS
+- `--restarts` : Nombre de restarts (multi-départ)
+- `--kmax` : Intensité maximale de shake VNS (pour VNS uniquement)
+- `--alpha` : Paramètre pour construction randomisée (0=déterministe, 1=aléatoire)
 
 ---
 
@@ -610,8 +808,10 @@ Le fichier `results.csv` contient les colonnes suivantes :
 - `file` : Nom du fichier d'instance
 - `rcapt` : Rayon de captation
 - `rcom` : Rayon de communication
-- `algo` : Algorithme utilisé (`grasp` ou `vns`)
-- `time_s` : Temps de résolution en secondes
+- `algo` : Algorithme utilisé (`vns`, `ga`, `sa`)
+- `per_run_s` : Temps par restart (secondes)
+- `restarts` : Nombre de restarts
+- `time_total_s` : Temps total de résolution en secondes
 - `sensors` : Nombre de capteurs dans la solution
 - `feasible` : `True` si la solution est réalisable
 - `uncovered` : Nombre de cibles non couvertes (devrait être 0)
@@ -645,13 +845,13 @@ generate_all_comparisons("results.csv", output_dir="results/comparisons", show=F
 
 #### Tableaux
 
-- **Tableau récapitulatif** : Compare GRASP et VNS pour chaque instance et paire de rayons
+- **Tableau récapitulatif** : Compare les algorithmes pour chaque instance et paire de rayons
 - **Colonne "Meilleur"** : Indique quel algorithme a trouvé la meilleure solution
 - **Statistiques** : Moyennes, médianes, écarts-types pour comparer la robustesse
 
 #### Graphiques
 
-1. **Comparaison capteurs** : Visualise la différence de qualité entre GRASP et VNS
+1. **Comparaison capteurs** : Visualise la différence de qualité entre les algorithmes
 2. **Comparaison temps** : Montre les performances temporelles
 3. **Performance par rayons** : Analyse l'impact des paramètres `Rcapt` et `Rcom`
 
@@ -661,27 +861,24 @@ Pour une analyse complète :
 
 1. **Exécuter les algorithmes** sur toutes les instances :
    ```bash
-   python main.py --folder "./instances" --algo both --time 2.0
+   python main.py --folder "./instances" --algo sa --time 2.0 --restarts 5
    ```
 
-2. **Générer les comparaisons** :
-   ```bash
-   python main.py --compare
-   ```
-
-3. **Examiner** :
-   - Les tableaux dans la console
-   - Les graphiques dans `results/comparisons/`
-   - Les visualisations individuelles dans `results/plots/`
+2. **Examiner** :
+   - Les résultats dans le CSV
+   - Les visualisations individuelles dans `results/plots/` (organisées par timestamp)
+   - Les statistiques affichées en fin d'exécution
 
 ---
 
 ## Notes de développement
 
-- Le code est entièrement commenté en anglais (conventions Python)
+- Le code est commenté en français
 - Les algorithmes suivent les principes vus en cours de métaheuristiques
 - La structure modulaire permet d'ajouter facilement de nouveaux voisinages ou métaheuristiques
 - Les solutions sont toujours vérifiées pour la faisabilité avant d'être retournées
+- Les plots sont organisés dans des sous-dossiers avec timestamp (format: `jour_heure_minute`)
+- Les paramètres du recuit simulé ont été optimisés via grid search (voir `benchmark_sa_params.py`)
 
 ---
 
@@ -693,5 +890,6 @@ Projet réalisé dans le cadre du cours de Métaheuristiques (M2 SOD24).
 
 ## Références
 
-- Feo, T. A., & Resende, M. G. (1995). Greedy randomized adaptive search procedures. *Journal of global optimization*, 6(2), 109-133.
 - Mladenović, N., & Hansen, P. (1997). Variable neighborhood search. *Computers & operations research*, 24(11), 1097-1100.
+- Kirkpatrick, S., Gelatt, C. D., & Vecchi, M. P. (1983). Optimization by simulated annealing. *Science*, 220(4598), 671-680.
+- Goldberg, D. E. (1989). *Genetic algorithms in search, optimization, and machine learning*. Addison-Wesley.

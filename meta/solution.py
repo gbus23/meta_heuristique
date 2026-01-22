@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,6 +19,7 @@ class Solution:
 
 
 def covered_targets(inst: Instance, sol: Solution) -> Set[Idx]:
+    """Retourne l'ensemble des cibles couvertes."""
     cov: Set[Idx] = set()
     for s in sol.sensors:
         cov |= inst.cover[s]
@@ -27,6 +27,7 @@ def covered_targets(inst: Instance, sol: Solution) -> Set[Idx]:
 
 
 def connected_to_sink(inst: Instance, sol: Solution) -> Set[Idx]:
+    """Retourne l'ensemble des capteurs connectés au sink (BFS)."""
     if not sol.sensors:
         return set()
 
@@ -46,6 +47,7 @@ def connected_to_sink(inst: Instance, sol: Solution) -> Set[Idx]:
 
 
 def is_feasible(inst: Instance, sol: Solution) -> bool:
+    """Vérifie si la solution est faisable (couverture complète + connectivité)."""
     if len(covered_targets(inst, sol)) != inst.n:
         return False
     if len(connected_to_sink(inst, sol)) != sol.size():
@@ -54,11 +56,7 @@ def is_feasible(inst: Instance, sol: Solution) -> bool:
 
 
 def shortest_path_in_comm_graph(inst: Instance, src: Idx, goals: Set[Idx]) -> Optional[List[Idx]]:
-    """
-    Shortest path in the FULL communication graph (nodes = candidates),
-    independent of current selection.
-    Returns [src, ..., goal] or None.
-    """
+    """Plus court chemin dans le graphe de communication complet."""
     if src in goals:
         return [src]
 
@@ -71,7 +69,6 @@ def shortest_path_in_comm_graph(inst: Instance, src: Idx, goals: Set[Idx]) -> Op
             if v not in parent:
                 parent[v] = u
                 if v in goals:
-                    # Reconstruct path
                     path = [v]
                     cur = u
                     while cur is not None:
@@ -85,21 +82,17 @@ def shortest_path_in_comm_graph(inst: Instance, src: Idx, goals: Set[Idx]) -> Op
 
 
 def repair_connectivity(inst: Instance, sol: Solution) -> Solution:
-    """
-    Repair heuristic: add relay sensors so that all selected sensors connect to the sink component.
-    Assumes coverage is handled elsewhere (constructive / move filters).
-    """
+    """Répare la connectivité en ajoutant des capteurs-relais si nécessaire."""
     sol = sol.copy()
     if not sol.sensors:
         return sol
 
     conn = connected_to_sink(inst, sol)
     if not conn:
-        # Seed with a sink neighbor if possible
         if inst.sink_comm:
             sol.sensors.add(inst.sink_comm[0])
         else:
-            return sol  # no possible sink adjacency
+            return sol
 
     while True:
         conn = connected_to_sink(inst, sol)

@@ -12,10 +12,10 @@ from typing import List, Tuple, Optional
 from meta.io_instances import load_targets
 from meta.instance import Instance
 from meta.solution import is_feasible, covered_targets, connected_to_sink
-from meta.grasp import grasp
 from meta.vns import vns
 from meta.visualization import plot_solution_auto
 from meta.genetic import genetic_algorithm
+from meta.simulated_annealing import simulated_annealing
 
 
 DEFAULT_PAIRS: List[Tuple[int, int]] = [(1, 1), (1, 2), (2, 2), (2, 3)]
@@ -41,19 +41,13 @@ def iter_dat_files(folder: str) -> List[str]:
 
 def solve_one(inst: Instance, algo: str, time_limit_s: float, seed: int, alpha: float, kmax: int):
     algo = algo.lower()
-    if algo == "grasp":
-        return grasp(inst, time_limit_s=time_limit_s, alpha=alpha, seed=seed)
     if algo == "vns":
         return vns(inst, time_limit_s=time_limit_s, kmax=kmax, seed=seed)
     if algo == "ga":
         return genetic_algorithm(inst, time_limit_s=time_limit_s, pop_size=50, seed=seed)
-    if algo == "both":
-        s1 = grasp(inst, time_limit_s=time_limit_s, alpha=alpha, seed=seed)
-        s2 = vns(inst, time_limit_s=time_limit_s, kmax=kmax, seed=seed)
-        if is_feasible(inst, s1) and is_feasible(inst, s2):
-            return s1 if s1.size() <= s2.size() else s2
-        return s1 if is_feasible(inst, s1) else s2
-    raise ValueError(f"Unknown algo: {algo}")
+    if algo == "sa" or algo == "annealing":
+        return simulated_annealing(inst, time_limit_s=time_limit_s, seed=seed)
+    raise ValueError(f"Algorithme inconnu: {algo}")
 
 
 def solve_multi(inst: Instance,
@@ -64,12 +58,7 @@ def solve_multi(inst: Instance,
                 alpha: float,
                 kmax: int,
                 verbose: bool = False):
-    """
-    Multi-restart wrapper:
-      - runs the chosen algorithm 'restarts' times
-      - each time with a different seed (seed + r)
-      - returns the best feasible solution (min |S|)
-    """
+    """Multi-restart : exécute l'algorithme 'restarts' fois avec des seeds différentes."""
     best_sol = None
     best_size = 10**18
     all_sizes = []
@@ -129,20 +118,18 @@ def run_batch(paths: List[str],
               csv_out: str) -> None:
     rows = []
     
-    # Create timestamped subfolder for this run (format: jour_heure_minute, e.g., 16_14_21)
     timestamp = datetime.now().strftime("%d_%H_%M")
     plots_dir = os.path.join("results", "plots", timestamp)
     os.makedirs(plots_dir, exist_ok=True)
 
-    # Calculate total number of tasks
     used_pairs = [(int(rcapt), int(rcom))] if (rcapt is not None and rcom is not None) else pairs
     total_tasks = len(paths) * len(used_pairs)
     current_task = 0
 
     print(f"\n{'='*70}")
-    print(f"Batch execution: {len(paths)} instance(s) x {len(used_pairs)} paire(s) = {total_tasks} tache(s)")
-    print(f"Algorithme: {algo.upper()}, Restarts: {restarts}, Temps/run: {per_run_s}s")
-    print(f"Plots sauvegardes dans: {plots_dir}")
+    print(f"Batch: {len(paths)} instance(s) x {len(used_pairs)} paire(s) = {total_tasks} tache(s)")
+    print(f"Algo: {algo.upper()}, Restarts: {restarts}, Temps/run: {per_run_s}s")
+    print(f"Plots: {plots_dir}")
     print(f"{'='*70}\n")
 
     for idx, p in enumerate(paths):
@@ -176,16 +163,12 @@ def run_batch(paths: List[str],
             status = "OK" if feas else "FAIL"
             print(f"Done: {sol.size()} capteurs, {dt:.2f}s, {status}")
 
-            # ---- AUTO SAVE PLOT (no display) ----
             base = _safe_stem(os.path.splitext(file_name)[0])
             tag = f"R{int(inst.rcapt)}-{int(inst.rcom)}"
             out_name = f"{base}__{tag}__{algo}__S{sol.size()}__RR{restarts}__T{per_run_s}.png"
             save_path = os.path.join(plots_dir, out_name)
 
-            title = (
-                f"{file_name} | R=({inst.rcapt},{inst.rcom}) | {algo} | "
-                f"sensors={sol.size()} | uncov={uncovered} | disc={disconnected}"
-            )
+            title = f"{file_name} | R=({inst.rcapt},{inst.rcom}) | {algo} | sensors={sol.size()} | uncov={uncovered} | disc={disconnected}"
 
             plot_solution_auto(
                 inst,
@@ -218,16 +201,14 @@ def run_batch(paths: List[str],
         w.writeheader()
         w.writerows(rows)
 
-    # Summary
     feasible_count = sum(1 for r in rows if r["feasible"])
     avg_sensors = sum(r["sensors"] for r in rows) / len(rows) if rows else 0
     total_time = sum(r["time_total_s"] for r in rows)
     
     print(f"\n{'='*70}")
-    print(f"Termine ! {len(rows)} resultat(s) sauvegarde(s) dans: {csv_out}")
-    print(f"  - Solutions faisables: {feasible_count}/{len(rows)}")
-    print(f"  - Moyenne capteurs: {avg_sensors:.2f}")
-    print(f"  - Temps total: {total_time:.2f}s ({total_time/60:.2f}min)")
+    print(f"Termine: {len(rows)} resultat(s) -> {csv_out}")
+    print(f"  Faisables: {feasible_count}/{len(rows)}, Moyenne: {avg_sensors:.2f} capteurs")
+    print(f"  Temps: {total_time:.2f}s ({total_time/60:.2f}min)")
     print(f"{'='*70}\n")
 
 
@@ -238,13 +219,13 @@ def main():
     ap.add_argument("--outdir", type=str, default="./_instances_extract", help="Where to extract zip (if used).")
     ap.add_argument("--csv", type=str, default="results.csv", help="Output CSV file.")
 
-    ap.add_argument("--algo", type=str, default="both", choices=["grasp", "vns", "both","ga"])
-    ap.add_argument("--time", type=float, default=2.0, help="(Legacy) Total time per instance+pair (seconds).")
-    ap.add_argument("--per-run", type=float, default=None, help="Time per restart run (seconds).")
-    ap.add_argument("--restarts", type=int, default=1, help="Number of restarts (runs) per instance+pair.")
+    ap.add_argument("--algo", type=str, default="sa", choices=["vns", "ga", "sa", "annealing"])
+    ap.add_argument("--time", type=float, default=2.0, help="Temps par run (secondes).")
+    ap.add_argument("--per-run", type=float, default=None, help="Temps par restart (secondes).")
+    ap.add_argument("--restarts", type=int, default=1, help="Nombre de restarts par instance+paire.")
 
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--alpha", type=float, default=0.3, help="GRASP alpha for RCL (0..1).")
+    ap.add_argument("--alpha", type=float, default=0.3, help="Alpha pour construction randomisée (0..1).")
     ap.add_argument("--kmax", type=int, default=4, help="VNS kmax.")
 
     ap.add_argument("--rcapt", type=float, default=None, help="If set with --rcom, run only this pair.")
@@ -256,11 +237,10 @@ def main():
 
     args = ap.parse_args()
 
-    # Choose per-run time
     per_run_s = args.per_run if args.per_run is not None else args.time
     restarts = max(1, int(args.restarts))
 
-    # ---------- PLOT MODE ----------
+    # Mode plot
     if args.plot:
         if args.file is None:
             raise SystemExit("--plot requires --file <path_to_dat>")
@@ -311,7 +291,7 @@ def main():
         print(f"Saved plot -> {save_path}")
         return
 
-    # ---------- BATCH MODE ----------
+    # Mode batch
     if args.zip is None and args.folder is None:
         raise SystemExit("Provide either --zip or --folder.")
 

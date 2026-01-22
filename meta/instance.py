@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ Idx = int
 
 
 def dist2(a: Point, b: Point) -> float:
+    """Distance au carré entre deux points."""
     dx = a[0] - b[0]
     dy = a[1] - b[1]
     return dx * dx + dy * dy
@@ -16,18 +16,15 @@ def dist2(a: Point, b: Point) -> float:
 
 @dataclass(frozen=True)
 class Instance:
-    """
-    Candidate sensor locations are exactly the targets.
-    """
+    """Instance du problème : positions des cibles, rayons, voisinages précalculés."""
     targets: List[Point]
     sink: Point
     rcapt: float
     rcom: float
 
-    # Precomputed neighborhoods
-    cover: List[Set[Idx]]     # cover[i] = set of targets covered if sensor placed at i
-    comm: List[List[Idx]]     # comm[i]  = list of candidates within Rcom of i
-    sink_comm: List[Idx]      # candidates within Rcom of sink
+    cover: List[Set[Idx]]     # cover[i] = cibles couvertes si capteur en i
+    comm: List[List[Idx]]      # comm[i] = candidats à portée Rcom de i
+    sink_comm: List[Idx]      # candidats à portée Rcom du sink
 
     @property
     def n(self) -> int:
@@ -35,6 +32,7 @@ class Instance:
 
     @staticmethod
     def build(targets: List[Point], sink: Point, rcapt: float, rcom: float) -> "Instance":
+        """Construit une instance avec voisinages précalculés."""
         n = len(targets)
         rc2 = rcapt * rcapt
         rcom2 = rcom * rcom
@@ -43,7 +41,6 @@ class Instance:
         comm: List[List[Idx]] = [[] for _ in range(n)]
         sink_comm: List[Idx] = []
 
-        # Coverage
         for i in range(n):
             pi = targets[i]
             s = set()
@@ -52,7 +49,6 @@ class Instance:
                     s.add(j)
             cover[i] = s
 
-        # Communication graph
         for i in range(n):
             pi = targets[i]
             neigh: List[Idx] = []
@@ -63,7 +59,6 @@ class Instance:
                     neigh.append(j)
             comm[i] = neigh
 
-        # Sink adjacency
         for i in range(n):
             if dist2(sink, targets[i]) <= rcom2 + 1e-12:
                 sink_comm.append(i)

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import time
@@ -11,10 +10,7 @@ from .solution import covered_targets, is_feasible, repair_connectivity, Solutio
 
 
 def shake(inst: Instance, sol: Solution, rng: random.Random, k: int) -> Solution:
-    """
-    Vk: apply k random moves among remove/add/swap.
-    Then repair connectivity.
-    """
+    """Applique k mouvements aléatoires (retirer/ajouter/échanger)."""
     s = sol.copy()
     for _ in range(k):
         r = rng.random()
@@ -27,20 +23,11 @@ def shake(inst: Instance, sol: Solution, rng: random.Random, k: int) -> Solution
             if s.sensors:
                 s.sensors.remove(rng.choice(tuple(s.sensors)))
             s.sensors.add(rng.randrange(inst.n))
-
     return repair_connectivity(inst, s)
 
 
 def vns(inst: Instance, time_limit_s: float = 2.0, kmax: int = 4, seed: int = 0) -> Solution:
-    """
-    VNS:
-      - start from feasible solution
-      - repeat until time limit:
-          k = 1..kmax:
-            x'  = shake(best, k)
-            x'' = local_search(x')
-            if improved: best = x''; k = 1 else k++
-    """
+    """Variable Neighborhood Search."""
     rng = random.Random(seed)
     t0 = time.time()
 
@@ -52,7 +39,6 @@ def vns(inst: Instance, time_limit_s: float = 2.0, kmax: int = 4, seed: int = 0)
         while k <= kmax and time.time() - t0 < time_limit_s:
             x1 = shake(inst, best, rng=rng, k=k)
 
-            # Strictly keep feasibility: if shake broke coverage, rebuild using randomized greedy
             if len(covered_targets(inst, x1)) != inst.n:
                 x1 = randomized_greedy_construct(inst, rng=rng, alpha=0.3)
 
