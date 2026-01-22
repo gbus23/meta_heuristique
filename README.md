@@ -428,6 +428,79 @@ SORTIE: Meilleure solution best
 5. RETOURNER best
 ```
 
+### Algorithme Génétique Hybride (Memetic Algorithm) (`genetic_algorithm`)
+
+#### Principe
+
+L'Algorithme Génétique implémenté est une approche **mémétique** qui combine l'exploration globale d'un algorithme évolutif avec l'intensification locale d'une recherche locale (VND). Il utilise un **codage binaire implicite** (ensemble de capteurs actifs) et des opérateurs géométriques adaptés aux réseaux de capteurs.
+
+#### Composants clés
+
+1. **Population Initiale Intelligente** : Générée via l'heuristique `randomized_greedy_construct` pour démarrer avec des solutions valides et de qualité.
+2. **Sélection par Tournoi** : Sélection des parents par confrontation directe (taille du tournoi ).
+3. **Croisement Géométrique (Block Crossover)** : Préserve les structures locales connectées en combinant des zones rectangulaires de la grille issues de différents parents.
+4. **Réparation Systématique** : Utilise `repair_connectivity` pour garantir la validité des enfants après croisement/mutation.
+5. **Hybridation (Recherche Locale)** : Applique le VND sur chaque enfant pour atteindre immédiatement un optimum local.
+
+#### Algorithme détaillé
+
+```
+ENTRÉE: Instance inst, time_limit_s, pop_size, seed
+SORTIE: Meilleure solution best
+
+1. Initialisation:
+   - Générer pop_size solutions via randomized_greedy_construct()
+   - best = meilleure solution de la population
+
+2. TANT QUE time() - t0 < time_limit_s:
+   a. Nouvelle population new_pop = []
+   
+   b. TANT QUE |new_pop| < pop_size:
+      
+      i. Sélection:
+         - p1 = tournoi(population, k=2)
+         - p2 = tournoi(population, k=2)
+      
+      ii. Croisement (Block Crossover):
+          - Choisir un rectangle aléatoire R sur la grille
+          - child = (p1 ∩ R) ∪ (p2 \ R)
+      
+      iii. Mutation (Bit-flip):
+           - Avec proba P: Ajouter/Supprimer un capteur aléatoire
+      
+      iv. Réparation & Amélioration:
+           - child = repair_connectivity(inst, child)
+           - child = local_search_vnd(inst, child)
+      
+      v. Intégration:
+           - Si child est réalisable, ajouter à new_pop
+           - Mettre à jour best si child est meilleur
+
+   c. Remplacement: population = new_pop
+
+3. RETOURNER best
+
+```
+
+#### Complexité et Performance
+
+* **Avantages** : Explore efficacement l'espace global, capable de recombiner des sous-structures distantes (ex: une bonne couverture au Nord avec une bonne couverture au Sud).
+* **Coût** : Plus lent par itération que GRASP/VNS à cause de la gestion de la population et de la réparation systématique des enfants.
+* **Usage recommandé** : Sur les instances de très grande taille ou fortement morcelées où les méthodes de descente (GRASP/VNS) risquent de piéger.
+
+---
+
+Ensuite, mettez à jour la section **7. Installation et utilisation** pour ajouter la commande de l'AG :
+
+#### 6. Exécution de l'Algorithme Génétique
+
+```bash
+python main.py --folder "./instances" --algo ga --time 5.0 --seed 42
+
+```
+
+*Note : L'AG nécessite généralement un temps d'exécution légèrement plus long pour converger que les méthodes à solution unique.*
+
 #### Paramètres
 
 - **kmax** : Intensité maximale de shake (défaut: 4)
